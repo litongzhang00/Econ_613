@@ -1,0 +1,375 @@
+---
+title: "Assignment 1"
+author: "Yongyi Lin"
+date: "2/28/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+```
+
+```{r read dataset}
+setwd("/Users/yongyilin/Econ613/Assignments/A1/dat")
+stu = read.csv("datstu.csv", stringsAsFactors = FALSE)
+jss = read.csv("datjss.csv", stringsAsFactors = FALSE)
+sss = read.csv("datsss.csv", stringsAsFactors = FALSE)
+```
+
+## Part 1 
+
+### Exercise 1 Missing Data 
+
+Number of Students
+
+```{r}
+length(unique(stu$X)) 
+```
+There are 340823 students.
+
+Number of Schools
+
+```{r}
+school <- stu %>%
+  dplyr::select(starts_with("schoolcode")) %>%
+  pivot_longer(
+    cols = starts_with("schoolcode"),
+    names_to = "rank",
+    names_prefix = "schoolcode",
+    values_to = "school",
+    values_drop_na = TRUE
+  ) %>%
+  dplyr::select(-c(1)) %>% 
+  mutate_all(na_if,"")
+sum(is.na(school)) # No missing strings.
+length(unique(school$school)) 
+```
+There are 640 schools.
+
+Number of Programs
+
+```{r}
+program <- stu %>%
+  dplyr::select(starts_with("choicepgm")) %>%
+  pivot_longer(
+    cols = starts_with("choicepgm"),
+    names_to = "rank",
+    names_prefix = "choicepgm",
+    values_to = "program",
+    values_drop_na = TRUE
+  ) %>%
+  dplyr::select(-c(1)) %>%
+  mutate_all(na_if, "")
+sum(is.na(program)) # There are 38454 missing strings.
+program <- program[program != "NA"]
+length(unique(program)) 
+```
+There are 32 programs.
+
+Number of Choices
+
+```{r}
+choice <- stu %>%
+  dplyr::select(c(1, 5:16))
+choice[is.na(choice)] <- ""
+choice[choice == ""] <- "missing" # identify missing strings
+choice$choice1 <- paste(choice$schoolcode1, "-", choice$choicepgm1)
+choice$choice2 <- paste(choice$schoolcode2, "-", choice$choicepgm2)
+choice$choice3 <- paste(choice$schoolcode3, "-", choice$choicepgm3)
+choice$choice4 <- paste(choice$schoolcode4, "-", choice$choicepgm4)
+choice$choice5 <- paste(choice$schoolcode5, "-", choice$choicepgm5)
+choice$choice6 <- paste(choice$schoolcode6, "-", choice$choicepgm6)
+choice <- dplyr::select(choice, c(X, choice1:choice6)) %>%
+  pivot_longer(
+    cols = starts_with("choice"),
+    names_to = "rank",
+    names_prefix = "choice",
+    values_to = "choice",
+  )
+unique_choice <- dplyr::select(choice, "choice")
+unique_choice <- unique_choice[!grepl("missing", unique_choice$choice), ] # drop the rows with missing strings
+length(unique(unique_choice$choice))
+```
+There are 2773 choices.
+
+Missing Test Score
+
+```{r}
+summary(is.na(stu$score)) 
+```
+There are 179887 missing test scores
+
+Apply to the same school (different programs)
+
+```{r}
+for (i in 1:nrow(stu)) {
+  stu$samesch[i] = length(
+    unique(na.omit(unlist(stu[i, 5:10])))
+  )
+}
+sum(stu$samesch < 6-rowSums(is.na(stu[5:10])))
+```
+There are 120071 students applying to the same school.
+
+Apply to less than 6 choices
+
+```{r}
+less_choice <- choice %>%
+  separate(choice, c("schoolcode", "program"), sep = " - ") %>%
+  mutate(empty_choice = case_when(
+    schoolcode == "missing" ~ 1,
+    program == "missing" ~ 1,
+    TRUE ~ 0
+  )) %>%
+  filter(empty_choice == 1) %>% 
+  distinct(X) 
+nrow(less_choice) 
+```
+There are 21001 students who applied to less than 6 choices.
+
+### Exercise 2 Data
+
+```{r}
+# Create a school-program level dataset
+sch_prog <- stu %>%
+  dplyr::select(-c(3:4)) 
+sch_prog$choice1 <- paste(sch_prog$schoolcode1, "-", sch_prog$choicepgm1)
+sch_prog$choice2 <- paste(sch_prog$schoolcode2, "-", sch_prog$choicepgm2)
+sch_prog$choice3 <- paste(sch_prog$schoolcode3, "-", sch_prog$choicepgm3)
+sch_prog$choice4 <- paste(sch_prog$schoolcode4, "-", sch_prog$choicepgm4)
+sch_prog$choice5 <- paste(sch_prog$schoolcode5, "-", sch_prog$choicepgm5)
+sch_prog$choice6 <- paste(sch_prog$schoolcode6, "-", sch_prog$choicepgm6)
+sch_prog2 <- sch_prog %>%
+  dplyr::select(c("X", "score", "jssdistrict":"choice6")) %>%
+  pivot_longer(
+    cols = starts_with("choice"),
+    names_to = "rank",
+    names_prefix = "choice",
+    values_to = "choice",
+  ) %>%
+  separate(choice, c("schoolcode", "program"), sep = " - ") %>%
+  filter(rankplace == rank) %>%
+  drop_na()
+
+# left join "sss"
+sss2 <- sss %>%
+  dplyr::select(-c(1:2)) %>%
+  distinct() %>% 
+  drop_na()
+sch_prog3 <- merge(x = sch_prog2, y = sss2, by = "schoolcode", all.x = TRUE)
+
+# statistics
+sch_prog_summary <- sch_prog3 %>%
+  dplyr::select(c(1, 3:10)) %>%
+  group_by(schoolcode, program) %>%
+  dplyr::summarise(
+    cutoff = min(score),
+    quality = mean(score),
+    size = n(), .groups = "drop"
+  )
+head(sch_prog_summary)
+```
+
+### Exercise 3 Distance
+
+```{r}
+# define a distance function
+distance <- function(ssslong, jsslong, jsslat, ssslat) {
+  dist <- sqrt((69.172*(ssslong-jsslong)*cos(jsslat/57.3))^2 + (69.172*(ssslat-jsslat))^2)
+  return(dist)
+}
+jss2 <- jss %>%
+  dplyr::select(-c("X"))
+
+# left join jss
+sch_prog_dist <- merge(x = sch_prog3, y = jss2, by = "jssdistrict", all.x = TRUE)
+
+# calculate the distance
+sch_prog_dist <- mutate(sch_prog_dist, distance = distance(ssslong, ssslat, point_x, point_y))
+
+head(sch_prog_dist)
+```
+
+### Exercise 4 Descriptive Characteristics
+
+mean and sd for ranked choice
+```{r}
+rankedchoice0 <- sch_prog_dist %>%
+  drop_na() %>%
+  group_by(schoolcode, program, rankplace, rank) %>%
+  dplyr::summarise(
+    cutoff = min(score),
+    quality = mean(score),
+    dist = mean(distance)
+  )
+rankedchoice <- rankedchoice0 %>%
+  group_by(rankplace, rank) %>%
+  dplyr::summarise(
+    mean_cutoff = mean(cutoff),
+    sd_cutoff = sd(cutoff),
+    mean_quality = mean(quality),
+    sd_quality = sd(quality),
+    mean_dist = mean(dist),
+    sd_dist = sd(dist)
+  )
+rankedchoice
+```
+
+differentiate by quantile
+```{r}
+quantile <- sch_prog_dist %>%
+  drop_na()
+quantile$quantile <- ntile(quantile$score, 4)
+quantile_summary0 <- quantile %>%
+  group_by(schoolcode, program, rankplace, rank, quantile) %>%
+  dplyr::summarise(
+    cutoff = min(score),
+    quality = mean(score),
+    dist = mean(distance)
+  )
+quantile_summary <- quantile_summary0 %>%
+  drop_na() %>%
+  group_by(rankplace, rank, quantile) %>%
+  dplyr::summarise(
+    mean_cutoff = mean(cutoff),
+    sd_cutoff = sd(cutoff),
+    mean_quality = mean(quality),
+    sd_quality = sd(quality),
+    mean_dist = mean(dist),
+    sd_dist = sd(dist)
+  )
+quantile_summary
+```
+
+\newpage
+
+## Part 2
+
+### Exercise 5 Data Creation
+
+```{r}
+set.seed(956336)
+x1 <- runif(10000, 1, 3)
+x2 <- rgamma(10000, shape = 3, scale = 2)
+x3 <- rbernoulli(10000, p = 0.3)*1
+epsilon <- rnorm(10000, mean = 2, sd = 1)
+X <- cbind(x1, x2, x3)
+y <- 0.5+1.2*x1-0.9*x2+0.1*x3+epsilon
+y_bar <- mean(y)
+ydum <- ifelse(y>y_bar, 1, 0)
+dataset <- cbind(X, ydum)
+dataset <- as.data.frame(dataset)
+head(dataset)
+```
+
+### Exercise 6 OLS
+
+```{r}
+cor(y, x1) # 0.2013141, which is significantly different from 1.2
+
+cons <- rep(1, 10000)
+X <- cbind(cons,x1,x2,x3)
+beta <- solve(t(X)%*%X)%*%t(X)%*%y
+rownames(beta)[1] <- 'intercept'
+colnames(beta)[1] <- 'est_beta'
+beta
+
+sigma2 <- sum((y-X%*%beta)^2)/(nrow(X)-ncol(X))
+var <- sigma2*solve(t(X)%*%X)
+se_ols <- sqrt(diag(var))
+se_ols
+```
+
+### Exercise 7 Discrete Choice
+
+```{r Discrete Choice}
+set.seed(100)
+start <- runif(4, 0.1, 0.5)
+
+# sum of log-likelihood function
+ll <- function(f, y, x, beta) {
+  pr <- f(x, beta)
+  pr[pr>0.999999] = 0.999999
+  pr[pr<0.000001] = 0.000001
+  likelihood <- (pr^y)*((1-pr)^(1-y))
+  return(sum(log(likelihood)))
+}
+
+# optimize the probit model
+probit <- function(x, beta) {
+  xbeta <- x %*% beta
+  return(pnorm(xbeta))
+}
+pb_ll <- function(beta) {
+  return(-ll(f = probit, y = ydum, x = X, beta))
+}
+pb <- optim(par = start, fn = pb_ll, method = "BFGS", hessian = T)
+
+# optimize the logit model
+logit <- function(x, beta) {
+  xbeta <- x %*% beta
+  return(exp(xbeta)/(1+exp(xbeta)))
+}
+lg_ll <- function(beta) {
+  return(-ll(f = logit, y = ydum, x = X, beta))
+}
+lg <- optim(par = start, fn = lg_ll, method = "BFGS", hessian = T)
+
+# optimize the linear model
+linear <- function(x, beta) {
+  return(sum((x %*% beta - ydum)^2))
+}
+ln <- optim(par = start, fn = linear, x = X, method = "BFGS", hessian = T)
+
+# estimation outcome
+estimation_compare <- cbind(pb$par, lg$par, ln$par)
+colnames(estimation_compare) <- c("coef_probit", "coef_logit", "coef_linear")
+rownames(estimation_compare) <- c("intercept", "x1", "x2", "x3")
+
+estimation_compare
+```
+
+
+### Exercise 8 Marginal Effects
+
+```{r ME & SE}
+mfxboot <- function(modform,dist,data,boot=1000,digits=3){
+  x <- glm(modform, family=binomial(link=dist),data)
+  # get marginal effects
+  pdf <- ifelse(dist=="probit",
+                mean(dnorm(predict(x, type = "link"))),
+                mean(dlogis(predict(x, type = "link"))))
+  marginal.effects <- pdf*coef(x)
+  # start bootstrap
+  bootvals <- matrix(rep(NA,boot*length(coef(x))), nrow=boot)
+  set.seed(1704)
+  for(i in 1:boot){
+    samp1 <- data[sample(1:dim(data)[1],replace=T,dim(data)[1]),]
+    x1 <- glm(modform, family=binomial(link=dist),samp1)
+    pdf1 <- ifelse(dist=="probit",
+                   mean(dnorm(predict(x, type = "link"))),
+                   mean(dlogis(predict(x, type = "link"))))
+    bootvals[i,] <- pdf1*coef(x1)
+  }
+  res <- cbind(marginal.effects,apply(bootvals,2,sd),marginal.effects/apply(bootvals,2,sd))
+  if(names(x$coefficients[1])=="(Intercept)"){
+    res1 <- res[2:nrow(res),]
+    res2 <- matrix(as.numeric(sprintf(paste("%.",paste(digits,"f",sep=""),sep=""),res1)),nrow=dim(res1)[1])     
+    rownames(res2) <- rownames(res1)
+  } else {
+    res2 <- matrix(as.numeric(sprintf(paste("%.",paste(digits,"f",sep=""),sep="")),nrow=dim(res)[1]))
+    rownames(res2) <- rownames(res)
+  }
+  colnames(res2) <- c("marginal.effect","standard.error","z.ratio")  
+  return(res2)
+}
+
+mfx_probit <- mfxboot(ydum ~ x1 + x2 + x3, "probit", dataset)
+mfx_logit <- mfxboot(ydum ~ x1 + x2 + x3, "logit", dataset)
+
+mfx_probit
+mfx_logit
+```
